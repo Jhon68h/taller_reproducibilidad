@@ -1,0 +1,12 @@
+{
+  "TRON": {
+    "method": "TRON",
+    "time": 0.0,
+    "accuracy": 1.0
+  },
+  "MLlib": {
+    "method": "MLlib",
+    "time": 12.39537262916565,
+    "accuracy": 1.0
+  }
+}

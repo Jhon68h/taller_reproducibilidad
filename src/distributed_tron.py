@@ -265,9 +265,7 @@ def _tau_to_boundary(d, p, delta):
     return max(0.0, tau)
 
 
-# ---------------------------
 # TRON principal
-# ---------------------------
 
 def tron(
     data_rdd,
@@ -447,7 +445,7 @@ if __name__ == "__main__":
     np.save(args.save, w)
     print(f"[INFO] Modelo guardado en: {args.save}")
 
-    # Evaluar opcional
+    # Evaluar 
     if args.eval:
         acc, total, correct = predict_labels(data_rdd, w)
         print(f"[EVAL] Accuracy={acc*100:.2f}%  ({correct}/{total})")
