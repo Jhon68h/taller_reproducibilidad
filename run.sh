@@ -57,4 +57,3 @@ cat "$RESULTS_PATH"
 echo
 echo "=============================================="
 echo "Experimento completado correctamente."
-echo "=============================================="
