@@ -1,59 +1,27 @@
-#!/bin/bash
-DATASET_PATH="../dataset/webspam_wc_normalized_unigram.svm"
-MODEL_PATH="../models/webspam_tron.npy"
-RESULTS_PATH="results_comparison.json"
+#!/usr/bin/env bash
+set -euo pipefail
 
-C=1.0
-PARTITIONS=32
-MAX_OUTER_ITER=20
-MAX_ITER_MLLIB=100
-COALESCE=32
+DATA="/home/jhonatan/Documents/analisis_de_datos_a_gran_escala/taller_reproducibilidad/dataset/webspam_wc_normalized_unigram.svm"
 
-echo "=============================================="
-echo "     EXPERIMENTO DISTRIBUIDO SPARK - TRON"
-echo "=============================================="
-echo "Dataset: $DATASET_PATH"
-echo "Modelo:  $MODEL_PATH"
-echo "----------------------------------------------"
-
-echo "[1] Verificando carga del dataset..."
-python data_loader.py --data "$DATASET_PATH"
-if [ $? -ne 0 ]; then
-  echo "Error cargando el dataset. Abortando."
-  exit 1
+# Opción 2: pásala como primer argumento al ejecutar:
+#   bash run_local.sh /ruta/a/mi_dataset.svm
+if [[ $# -ge 1 ]]; then
+  DATA="$1"
 fi
-echo "OK: Dataset cargado correctamente."
-echo "----------------------------------------------"
 
-if [ ! -f "$MODEL_PATH" ]; then
-  echo "[2] Entrenando modelo TRON..."
-  python distributed_tron.py --data "$DATASET_PATH" \
-      --C $C --partitions $PARTITIONS --max_outer_iter $MAX_OUTER_ITER \
-      --coalesce $COALESCE --save "$MODEL_PATH" --eval
+# Hiperparámetros básicos
+SOLVER="lr"         # "lr" (logística) o "l2svm" (hinge^2)
+CVAL="1.0"          # regularización
+EPS="1e-2"          # tolerancia TRON
+BIAS="-1"           # -1 sin bias; usa 1.0 para añadir columna de sesgo
+MAXITER="100"       # iteraciones máximas
 
-
-else
-  echo "[2] Modelo TRON encontrado. Saltando entrenamiento."
-fi
-echo "----------------------------------------------"s
-
-echo "[3] Ejecutando comparación TRON vs MLlib..."
-python evaluation.py \
-    --data "$DATASET_PATH" \
-    --C $C \
-    --partitions $PARTITIONS \
-    --max_outer_iter $MAX_OUTER_ITER \
-    --max_iter_mllib $MAX_ITER_MLLIB \
-    --coalesce $COALESCE \
-    --reuse_model
-if [ $? -ne 0 ]; then
-  echo "Error ejecutando comparación. Abortando."
-  exit 1
-fi
-echo "----------------------------------------------"
-
-echo "[4] Resultados finales:"
-cat "$RESULTS_PATH"
-echo
-echo "=============================================="
-echo "Experimento completado correctamente."
+# Ejecuta el entrenamiento en modo local
+python src/train.py \
+  --mode local \
+  --data "${DATA}" \
+  --solver "${SOLVER}" \
+  --C "${CVAL}" \
+  --eps "${EPS}" \
+  --bias "${BIAS}" \
+  --maxIter "${MAXITER}"
