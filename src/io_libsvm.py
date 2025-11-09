@@ -7,6 +7,7 @@
 # * Convierte índices de 1-based (archivo) a 0-based (interno).
 # * Etiquetas se mapean a {+1.0, -1.0}: label > 0 -> +1.0 ; en caso contrario -> -1.0.
 # * Si bias >= 0, añade una columna virtual al final con valor 'bias' en todas las filas.
+# * n_features_force permite forzar el número de columnas totales (incluye bias si aplica).
 
 from __future__ import annotations
 import numpy as np
@@ -30,7 +31,6 @@ def _parse_libsvm_line(line: str) -> Tuple[float, List[int], List[float]]:
     try:
         y_val = float(y_raw)
     except Exception:
-        # En casos raros (e.g., etiquetas no numéricas), forzamos -1
         y_val = -1.0
     y = 1.0 if y_val > 0 else -1.0
 
@@ -53,9 +53,8 @@ def _parse_libsvm_line(line: str) -> Tuple[float, List[int], List[float]]:
         idxs.append(j)
         vals.append(x)
 
-    # Opcional: combinar índices repetidos en la misma fila (poco común)
+    # Combinar índices repetidos en la misma fila (si los hay)
     if len(idxs) >= 2:
-        # ordenar por índice y sumar duplicados
         order = np.argsort(idxs)
         idxs_sorted = [idxs[i] for i in order]
         vals_sorted = [vals[i] for i in order]
@@ -82,13 +81,18 @@ def _parse_libsvm_line(line: str) -> Tuple[float, List[int], List[float]]:
     return y, idxs, vals
 
 
-def load_libsvm_local(path: str, bias: float = -1.0) -> Tuple[CSR, np.ndarray, int]:
+def load_libsvm_local(
+    path: str,
+    bias: float = -1.0,
+    n_features_force: Optional[int] = None
+) -> Tuple[CSR, np.ndarray, int]:
     """
     Carga local del archivo LIBSVM.
     Devuelve:
       X: CSR (csr.CSR)
       y: np.ndarray (float64, valores en {+1.0, -1.0})
       n_features: columnas totales (incluido bias si aplica)
+    Si n_features_force no es None, fuerza el número de columnas totales (incluye bias).
     """
     y_list: List[float] = []
     rows_idx: List[List[int]] = []
@@ -103,7 +107,6 @@ def load_libsvm_local(path: str, bias: float = -1.0) -> Tuple[CSR, np.ndarray, i
             try:
                 y, idxs, vals = _parse_libsvm_line(line)
             except ValueError:
-                # línea vacía tras limpiar
                 continue
 
             if idxs:
@@ -119,11 +122,22 @@ def load_libsvm_local(path: str, bias: float = -1.0) -> Tuple[CSR, np.ndarray, i
     if n_rows == 0:
         raise RuntimeError(f"No se encontraron muestras válidas en: {path}")
 
-    n_features = max_j + 1
+    base_n = max_j + 1  # sin bias
     add_bias = bias is not None and bias >= 0.0
-    if add_bias:
-        bias_col = n_features  # nueva última columna
-        n_features += 1
+
+    if n_features_force is not None:
+        n_features = int(n_features_force)
+        if add_bias:
+            bias_col = n_features - 1
+        else:
+            if base_n > n_features:
+                raise ValueError(
+                    f"n_features_force={n_features} < columnas requeridas={base_n}"
+                )
+    else:
+        n_features = base_n + (1 if add_bias else 0)
+        if add_bias:
+            bias_col = base_n  # última columna natural
 
     # Construir CSR
     indptr = np.zeros(n_rows + 1, dtype=np.int64)
@@ -142,21 +156,18 @@ def load_libsvm_local(path: str, bias: float = -1.0) -> Tuple[CSR, np.ndarray, i
     for i in range(n_rows):
         idxs = rows_idx[i]
         vals = rows_val[i]
-        # Copiar pares existentes
         if idxs:
             li = len(idxs)
             indices[cursor:cursor + li] = np.asarray(idxs, dtype=np.int64)
             data[cursor:cursor + li] = np.asarray(vals, dtype=np.float64)
             cursor += li
-        # Añadir bias si corresponde
         if add_bias:
-            indices[cursor] = bias_col # type: ignore
+            indices[cursor] = bias_col
             data[cursor] = float(bias)
             cursor += 1
 
     X = CSR(indptr=indptr, indices=indices, data=data, n_cols=n_features)
     y = np.asarray(y_list, dtype=np.float64)
-
     return X, y, n_features
 
 
@@ -164,7 +175,7 @@ def load_libsvm_local(path: str, bias: float = -1.0) -> Tuple[CSR, np.ndarray, i
 
 def _parse_partition(iter_lines, bias: Optional[float]):
     """
-    parsea líneas en una partición -> genera tuplas (idx_np, val_np, y_float), max_idx_local
+    Parsea líneas en una partición -> genera tuplas (idx_np, val_np, y_float), max_idx_local
     Se emiten dos tipos de registros:
       ('data', (idx_np, val_np, y_float))
       ('maxj', int_max_indice_en_particion)
@@ -189,7 +200,6 @@ def _parse_partition(iter_lines, bias: Optional[float]):
         val_np = np.asarray(vals, dtype=np.float64)
         out.append(('data', (idx_np, val_np, float(y))))
 
-    # Emitir primero todos los datos, luego un registro con el max local
     for rec in out:
         yield rec
     yield ('maxj', max_j_local)
@@ -207,10 +217,8 @@ def load_libsvm_rdd(sc, path: str, numPartitions: Optional[int] = None, bias: fl
     else:
         rdd_raw = sc.textFile(path, minPartitions=int(numPartitions))
 
-    # Parse por partición, capturando max_j local
     parsed = rdd_raw.mapPartitions(lambda it: _parse_partition(it, bias))
 
-    # Separar datos y maximos
     data_rdd = parsed.filter(lambda kv: kv[0] == 'data').map(lambda kv: kv[1])
     maxj_rdd = parsed.filter(lambda kv: kv[0] == 'maxj').map(lambda kv: kv[1])
 
@@ -229,7 +237,6 @@ def load_libsvm_rdd(sc, path: str, numPartitions: Optional[int] = None, bias: fl
 
         def _append_bias(rec):
             idx, val, y = rec
-            # Añadir una entrada más al final (no es necesario ordenar)
             idx2 = np.empty(idx.size + 1, dtype=np.int64)
             val2 = np.empty(val.size + 1, dtype=np.float64)
             idx2[:-1] = idx
