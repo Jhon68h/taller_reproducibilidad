@@ -3,12 +3,14 @@ set -euo pipefail
 
 # ------------------------- Config base ------------------------- #
 DATA="/home/jhonatan/Documents/analisis_de_datos_a_gran_escala/taller_reproducibilidad/dataset/webspam_wc_normalized_unigram.svm"
-EPS="1e-3"
 MAXITER="100"
 SEED_MAIN="42"
 TRAIN_RATIO="0.8"     # split inicial train/test
-VAL_RATIO="0.8"       # porcentaje de train que se queda como train (resto es val)
-CVALS=("0.1" "1.0" "10.0")
+VAL_RATIO="0.8"       # split interno train/val
+
+# Barridos
+CVALS=("1e-3" "1e-2" "1e-1" "1" "10" "100")
+EPS_LIST=("1e-3" "1e-4")
 REPS=("1" "2" "3")
 
 command -v python >/dev/null 2>&1 || { echo "ERROR: python no está en PATH"; exit 1; }
@@ -51,11 +53,13 @@ mv -f "$TRAIN_ONLY" "$TRAIN"
 run_exp () {
   local SOLVER="$1"    # lr | l2svm
   local CVAL="$2"
-  local BIAS="$3"      # -1 o 1.0
-  local REP="$4"       # repetición (seed)
-  local TAG="${SOLVER}_C${CVAL}_eps${EPS}_bias${BIAS}_rep${REP}"
+  local EPS="$3"
+  local BIAS="$4"      # -1 o 1.0
+  local REP="$5"       # repetición (seed)
 
+  local TAG="${SOLVER}_C${CVAL}_eps${EPS}_bias${BIAS}_rep${REP}"
   echo "[*] Entrenando ${TAG}"
+
   python src/train.py \
     --mode local \
     --data "$TRAIN" \
@@ -80,13 +84,10 @@ run_exp () {
       --metric acc \
       --out "${LOGDIR}/threshold_${TAG}.json" | tee "${LOGDIR}/12_thr_${TAG}.log"
 
-    # EXTRAER best_threshold del JSON (sin jq), usando -c
     BEST_THR=$(python -c 'import json,sys;print(json.load(open(sys.argv[1]))["best_threshold"])' \
                "${LOGDIR}/threshold_${TAG}.json")
-
     THR_ARG=(--threshold "$BEST_THR")
   fi
-
 
   echo "[*] Evaluando test: ${TAG}"
   python src/eval.py \
@@ -96,18 +97,22 @@ run_exp () {
     "${THR_ARG[@]}" | tee "${LOGDIR}/20_eval_${TAG}.log"
 }
 
-# ------------------- Barrido de C y repeticiones ------------------- #
+# ------------------- Barrido de C, eps y repeticiones ------------------- #
 echo "[3/6] Experimentos LR (sin bias) con ajuste de umbral en validación"
 for C in "${CVALS[@]}"; do
-  for R in "${REPS[@]}"; do
-    run_exp "lr" "$C" "-1" "$R"
+  for EPS in "${EPS_LIST[@]}"; do
+    for R in "${REPS[@]}"; do
+      run_exp "lr" "$C" "$EPS" "-1" "$R"
+    done
   done
 done
 
 echo "[4/6] Experimentos L2-SVM (sin bias)"
 for C in "${CVALS[@]}"; do
-  for R in "${REPS[@]}"; do
-    run_exp "l2svm" "$C" "-1" "$R"
+  for EPS in "${EPS_LIST[@]}"; do
+    for R in "${REPS[@]}"; do
+      run_exp "l2svm" "$C" "$EPS" "-1" "$R"
+    done
   done
 done
 

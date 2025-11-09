@@ -1,2 +1,6 @@
 dataset/webspam_wc_normalized_unigram.svm
 data/*
+logs/*
+models/*
+outputs/*
+src/__pycache__
