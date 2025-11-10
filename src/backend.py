@@ -57,7 +57,7 @@ class LocalBackend:
 
 
 # -------------------------------------------------------------------------
-# Esqueleto opcional para Spark. Para habilitarlo:
+# Esqueleto para Spark. Para habilitarlo:
 #  1) Devuelve en io_libsvm_rdd un RDD de (row_id:int64, idx_np, val_np, y_float)
 #     con row_id = zipWithIndex() estable.
 #  2) Implementa margin/X_dot/Xt_dot usando broadcast(w) y broadcast(r),
@@ -66,7 +66,7 @@ class LocalBackend:
 
 class SparkBackend:
     """
-    ESQUELETO: no implementado en este archivo.
+    ESQUELETO:
 
     Requisitos para implementarlo correctamente:
       - RDD de registros: (row_id:int64, idx_np[int64], val_np[float64], y_float)
