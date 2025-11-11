@@ -78,13 +78,7 @@ class Tron:
         return p * (delta / nrm)
 
 
-    def trcg(
-        self,
-        w: Array,
-        g: Array,
-        delta: float,
-        tol: float,
-    ) -> Tuple[Array, int]:
+    def trcg(self,w: Array,g: Array,delta: float,tol: float,) -> Tuple[Array, int]:
         """
         Resuelve aproximadamente: (H) p ≈ -g con CG truncado,
         sujeto a ||p|| <= delta (proyección al cruzar el radio).
@@ -113,7 +107,6 @@ class Tron:
                 alpha = 1.0
             else:
                 alpha = rr / dz
-
             # Proponer nuevo p y proyectar si excede el radio
             p_new = p + alpha * d
             nrm_new = np.linalg.norm(p_new)

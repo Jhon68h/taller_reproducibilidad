@@ -1,59 +1,108 @@
-# compare_map_vs_partitions.py (versión corregida)
-import json, numpy as np, matplotlib.pyplot as plt, os, argparse
+# src/compare_map_vs_mappartitions_real.py
+import time, json, numpy as np, os
+import sys, os
+sys.path.append(os.path.abspath("src"))
+from pyspark.sql import SparkSession
+from io_libsvm import load_libsvm_rdd
+spark = SparkSession.builder.master("local[*]").appName("Compare_Map_vs_MapPartitions_Real").getOrCreate()
+sc = spark.sparkContext
+sc.addPyFile(os.path.abspath("src.zip"))
 
-def load_history(path):
-    """Carga tiempos (t_sec) y valores f(w) desde un log JSON."""
-    with open(path, "r", encoding="utf-8") as f:
-        j = json.load(f)
-    hist = j.get("history", [])
-    if not hist:
-        raise RuntimeError(f"No hay 'history' en {path}")
-    t = np.array([h.get("t_sec", np.nan) for h in hist], float)
-    fval = np.array([h.get("f", np.nan) for h in hist], float)
-    mask = np.isfinite(t) & np.isfinite(fval)
-    return t[mask], fval[mask]
 
-def rel_curve(fvals):
-    """Calcula curva log10(|(f - f*) / f*|)."""
-    f_star = np.nanmin(fvals)
-    return np.log10(np.abs((fvals - f_star) / f_star + 1e-12)), f_star
+# ==========================================================
+# Funciones auxiliares
+# ==========================================================
 
-def main():
-    ap = argparse.ArgumentParser("Comparación real: map vs mapPartitions")
-    ap.add_argument("--map_json", required=True, help="Log JSON (ejecución con map)")
-    ap.add_argument("--mappart_json", required=True, help="Log JSON (ejecución con mapPartitions)")
-    ap.add_argument("--title", default="webspam — map vs mapPartitions")
-    ap.add_argument("--out", default="graphics/webspam_map_vs_partitions_real.png")
-    args = ap.parse_args()
+def compute_map(record, w_broadcast):
+    """Simula operación local TRON usando map()."""
+    idx, val, y = record
+    w = w_broadcast.value
+    s = float(np.dot(val, w[idx]))   # producto interno <x, w>
+    return s * y
 
-    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
-    # Cargar historiales reales
-    t_map, f_map = load_history(args.map_json)
-    t_mappart, f_mappart = load_history(args.mappart_json)
+def compute_mappartition(iterator, w_broadcast):
+    """Simula operación TRON por partición (mapPartitions)."""
+    w = w_broadcast.value
+    local_sum = 0.0
+    for idx, val, y in iterator:
+        s = float(np.dot(val, w[idx]))
+        local_sum += s * y
+    yield local_sum
 
-    # Normalizar tiempos desde cero
-    t_map -= t_map.min()
-    t_mappart -= t_mappart.min()
 
-    # Curvas relativas
-    f_star = min(np.nanmin(f_map), np.nanmin(f_mappart))
-    rel_map = np.log10(np.abs((f_map - f_star) / f_star + 1e-12))
-    rel_mappart = np.log10(np.abs((f_mappart - f_star) / f_star + 1e-12))
+# ==========================================================
+# Ejecuciones
+# ==========================================================
 
-   # Graficar (tiempos reales, eje lineal)
-    plt.figure(figsize=(3.2, 3.2))
-    plt.plot(t_map, rel_map, 'r-', lw=2, label='map')
-    plt.plot(t_mappart, rel_mappart, 'b--', lw=2, label='mapPartitions')
-    plt.xlabel("Training time (seconds)")
-    plt.ylabel("Relative function value difference (log10)")
-    plt.legend()
-    plt.title(args.title)
-    plt.tight_layout()
-    plt.savefig(args.out, dpi=200)
-    plt.close()
-    print(f"[OK] Figura guardada en {args.out}")
+def run_map_version(rdd, n_features, iters=10):
+    """Ejecuta la versión map()."""
+    fvals, times = [], []
+    t0 = time.time()
+    w = np.random.randn(n_features)
+    w_b = rdd.context.broadcast(w)
+    for i in range(iters):
+        s = rdd.map(lambda rec: compute_map(rec, w_b)).sum()
+        fvals.append(s)
+        times.append(time.time() - t0)
+        print(f"[map] Iter {i+1:02d}  sum={s:.4f}  time={times[-1]:.3f}s")
+    w_b.unpersist()
+    return np.array(times), np.array(fvals)
 
+
+def run_mappartitions_version(rdd, n_features, iters=10):
+    """Ejecuta la versión mapPartitions()."""
+    fvals, times = [], []
+    t0 = time.time()
+    w = np.random.randn(n_features)
+    w_b = rdd.context.broadcast(w)
+    for i in range(iters):
+        s = rdd.mapPartitions(lambda it: compute_mappartition(it, w_b)).sum()
+        fvals.append(s)
+        times.append(time.time() - t0)
+        print(f"[mapPartitions] Iter {i+1:02d}  sum={s:.4f}  time={times[-1]:.3f}s")
+    w_b.unpersist()
+    return np.array(times), np.array(fvals)
+
+
+# ==========================================================
+# Programa principal
+# ==========================================================
 
 if __name__ == "__main__":
-    main()
+    spark = (
+        SparkSession.builder
+        .master("local[*]")
+        .appName("Compare_Map_vs_MapPartitions_Real")
+        .getOrCreate()
+    )
+    sc = spark.sparkContext
+
+    data_path = "dataset/webspam_wc_normalized_unigram.svm"
+    rdd, n_features = load_libsvm_rdd(sc, data_path, numPartitions=8, bias=-1)
+    rdd = rdd.cache()
+    n_samples = rdd.count()
+    print(f"[INFO] Dataset cargado: {n_samples} muestras, {n_features} características")
+
+    os.makedirs("logs", exist_ok=True)
+
+    # -------------------------
+    # 1. Ejecutar versión map()
+    # -------------------------
+    print("\n=== Ejecutando versión map() ===")
+    t_map, f_map = run_map_version(rdd, n_features, iters=10)
+    with open("logs/map_run.json", "w") as f:
+        json.dump({"t_map": t_map.tolist(), "f_map": f_map.tolist()}, f, indent=2)
+    print("[OK] Guardado: logs/map_run.json")
+
+    # -------------------------------
+    # 2. Ejecutar versión mapPartitions()
+    # -------------------------------
+    print("\n=== Ejecutando versión mapPartitions() ===")
+    t_mappart, f_mappart = run_mappartitions_version(rdd, n_features, iters=10)
+    with open("logs/mappart_run.json", "w") as f:
+        json.dump({"t_mappart": t_mappart.tolist(), "f_mappart": f_mappart.tolist()}, f, indent=2)
+    print("[OK] Guardado: logs/mappart_run.json")
+
+    spark.stop()
+    print("\n[FIN] Ejecución completada.")
